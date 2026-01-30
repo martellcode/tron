@@ -85,149 +85,113 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-      - name: Download binary from S3
-        run: |
-          aws s3 cp s3://${{ env.S3_BUCKET }}/binaries/tron-linux-amd64 ./tron-linux-amd64
-          chmod +x ./tron-linux-amd64
-
-      - name: Download config files from S3
-        run: |
-          aws s3 cp s3://${{ env.S3_BUCKET }}/config/tron.vega.yaml ./tron.vega.yaml || true
-          aws s3 sync s3://${{ env.S3_BUCKET }}/config/knowledge/ ./knowledge/ || true
-          echo "Config files downloaded"
-
       - name: Get target instances
         id: instances
         env:
           DEPLOY_INSTANCE: ${{ inputs.deploy_instance }}
         run: |
           if [ -n "$DEPLOY_INSTANCE" ]; then
-            # Deploy to specific instance
             FILTER="Name=tag:Instance,Values=${DEPLOY_INSTANCE}"
           else
-            # Deploy to all hellotron-vega instances
             FILTER="Name=tag:Project,Values=hellotron-vega"
           fi
 
-          # Get all running instances with their IPs and names
-          INSTANCES=$(aws ec2 describe-instances \
+          # Get instance IDs (SSM uses instance IDs, not IPs)
+          INSTANCE_IDS=$(aws ec2 describe-instances \
             --filters "$FILTER" "Name=instance-state-name,Values=running" \
-            --query 'Reservations[].Instances[].[PublicIpAddress,Tags[?Key==`Instance`].Value|[0]]' \
+            --query 'Reservations[].Instances[].InstanceId' \
             --output text)
 
-          if [ -z "$INSTANCES" ]; then
+          if [ -z "$INSTANCE_IDS" ]; then
             echo "No running instances found"
-            echo "instance_count=0" >> $GITHUB_OUTPUT
+            echo "instance_ids=" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "Found instances:"
-          echo "$INSTANCES"
+          echo "Found instances: $INSTANCE_IDS"
+          echo "instance_ids=$INSTANCE_IDS" >> $GITHUB_OUTPUT
 
-          # Save to file for next step
-          echo "$INSTANCES" > /tmp/instances.txt
-          INSTANCE_COUNT=$(echo "$INSTANCES" | wc -l | tr -d ' ')
-          echo "instance_count=$INSTANCE_COUNT" >> $GITHUB_OUTPUT
-
-      - name: Deploy to instances
-        if: steps.instances.outputs.instance_count != '0'
+      - name: Deploy via SSM
+        if: steps.instances.outputs.instance_ids != ''
+        env:
+          INSTANCE_IDS: ${{ steps.instances.outputs.instance_ids }}
+          S3_BUCKET: ${{ env.S3_BUCKET }}
         run: |
-          echo "Deploying to instances..."
+          echo "Deploying to instances: $INSTANCE_IDS"
 
-          while IFS=$'\t' read -r IP INSTANCE; do
-            if [ -z "$IP" ] || [ "$IP" == "None" ]; then
-              continue
+          # Convert space-separated IDs to comma-separated for SSM
+          TARGETS=$(echo $INSTANCE_IDS | tr ' ' ',')
+
+          # Send deployment command via SSM
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceids,Values=$TARGETS" \
+            --parameters commands='[
+              "set -e",
+              "cd /opt/tron",
+              "echo \"==> Downloading new binary from S3...\"",
+              "aws s3 cp s3://'"$S3_BUCKET"'/binaries/tron-linux-amd64 /tmp/tron-new",
+              "chmod +x /tmp/tron-new",
+              "echo \"==> Downloading config files...\"",
+              "aws s3 cp s3://'"$S3_BUCKET"'/config/tron.vega.yaml /tmp/tron.vega.yaml || true",
+              "aws s3 sync s3://'"$S3_BUCKET"'/config/knowledge/ /tmp/knowledge/ || true",
+              "echo \"==> Stopping tron service...\"",
+              "sudo systemctl stop tron || true",
+              "echo \"==> Replacing binary...\"",
+              "mv /tmp/tron-new ./tron",
+              "echo \"==> Syncing config files...\"",
+              "[ -f /tmp/tron.vega.yaml ] && mv /tmp/tron.vega.yaml ./",
+              "[ -d /tmp/knowledge ] && rsync -a /tmp/knowledge/ ./knowledge/ && rm -rf /tmp/knowledge",
+              "echo \"==> Starting tron service...\"",
+              "sudo systemctl start tron",
+              "sleep 3",
+              "echo \"==> Verifying service...\"",
+              "systemctl is-active --quiet tron && echo \"Service running\" || (journalctl -u tron -n 20 --no-pager && exit 1)",
+              "echo \"==> Health check...\"",
+              "curl -sf http://localhost:3000/health && echo \"Health OK\" || (echo \"Health check failed\" && exit 1)",
+              "echo \"==> Deployment complete!\""
+            ]' \
+            --timeout-seconds 120 \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "Command ID: $COMMAND_ID"
+
+          # Wait for command to complete
+          echo "Waiting for deployment to complete..."
+          for i in {1..30}; do
+            sleep 5
+            STATUS=$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" \
+              --query 'CommandInvocations[0].Status' \
+              --output text 2>/dev/null || echo "Pending")
+
+            echo "Status: $STATUS"
+
+            if [ "$STATUS" = "Success" ]; then
+              echo "Deployment successful!"
+
+              # Get output
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$(echo $INSTANCE_IDS | awk '{print $1}')" \
+                --query 'StandardOutputContent' \
+                --output text || true
+
+              exit 0
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+              echo "Deployment failed with status: $STATUS"
+
+              # Get error output
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$(echo $INSTANCE_IDS | awk '{print $1}')" \
+                --query '[StandardOutputContent, StandardErrorContent]' \
+                --output text || true
+
+              exit 1
             fi
+          done
 
-            echo ""
-            echo "=========================================="
-            echo "Deploying to $INSTANCE ($IP)"
-            echo "=========================================="
-
-            # Copy binary to instance
-            scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
-              ./tron-linux-amd64 ubuntu@${IP}:/tmp/tron-new
-
-            # Copy config files to instance
-            if [ -f "tron.vega.yaml" ]; then
-              scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
-                ./tron.vega.yaml ubuntu@${IP}:/tmp/
-            fi
-            if [ -d "knowledge" ]; then
-              scp -r -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key \
-                ./knowledge ubuntu@${IP}:/tmp/
-            fi
-
-            # Deploy on instance
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key ubuntu@${IP} << 'DEPLOY_SCRIPT'
-              set -e
-              cd /opt/tron
-
-              echo "Stopping tron service..."
-              sudo systemctl stop tron || true
-
-              echo "Replacing binary..."
-              mv /tmp/tron-new ./tron
-              chmod +x ./tron
-
-              echo "Syncing config files..."
-              [ -f /tmp/tron.vega.yaml ] && mv /tmp/tron.vega.yaml ./
-              [ -d /tmp/knowledge ] && rsync -a /tmp/knowledge/ ./knowledge/ && rm -rf /tmp/knowledge
-
-              echo "Starting tron service..."
-              sudo systemctl start tron
-
-              echo "Verifying service is running..."
-              sleep 3
-              if systemctl is-active --quiet tron; then
-                echo "Tron service running"
-              else
-                echo "Service failed to start!"
-                journalctl -u tron -n 20 --no-pager
-                exit 1
-              fi
-
-              echo "Testing health endpoint..."
-              HEALTH=$(curl -sf http://localhost:3000/health)
-              if [ $? -eq 0 ]; then
-                echo "Health check passed: $HEALTH"
-              else
-                echo "Health check failed!"
-                exit 1
-              fi
-
-              echo "Testing Docker..."
-              if ! docker info > /dev/null 2>&1; then
-                echo "Docker daemon not running!"
-                exit 1
-              fi
-
-              # Run a simple container test
-              if docker run --rm alpine:latest echo "DOCKER_OK" 2>&1 | grep -q "DOCKER_OK"; then
-                echo "Docker smoke test passed"
-              else
-                echo "Docker smoke test failed"
-                exit 1
-              fi
-
-              echo "All tests passed!"
-          DEPLOY_SCRIPT
-
-            if [ $? -eq 0 ]; then
-              echo "$INSTANCE deployed successfully"
-            else
-              echo "$INSTANCE deploy failed"
-            fi
-
-          done < /tmp/instances.txt
-
-          echo ""
-          echo "=========================================="
-          echo "Deployment complete!"
-          echo "=========================================="
+          echo "Deployment timed out waiting for SSM command"
+          exit 1
