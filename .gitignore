@@ -1,5 +1,5 @@
-# Binary
-tron
+# Binary (at root only, not cmd/tron/)
+/tron
 
 # Environment and secrets
 .env
