@@ -1,0 +1,19 @@
+# Required
+ANTHROPIC_API_KEY=your-anthropic-api-key
+
+# Optional - Directories (defaults to ~/.tron/workspace and ~/.tron/agents)
+WORKING_DIR=/path/to/workspace
+AGENTS_DIR=/path/to/agents
+
+# Optional - Email notifications for callbacks
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=user@example.com
+SMTP_PASS=your-smtp-password
+SMTP_FROM=tron@example.com
+
+# Optional - Web search (integrate with Brave, SerpAPI, etc.)
+SEARCH_API_KEY=your-search-api-key
+
+# Optional - Server configuration
+PORT=3000
