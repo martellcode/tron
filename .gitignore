@@ -4,7 +4,7 @@
 # Environment and secrets
 .env
 *.env
-config
+/config
 
 # IDE
 .idea/
