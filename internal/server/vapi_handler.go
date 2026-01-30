@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/martellcode/tron/internal/memory"
-	"github.com/vegaops/vega"
+	"github.com/martellcode/vega"
 )
 
 const (

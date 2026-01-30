@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vegaops/vega"
-	"github.com/vegaops/vega/dsl"
+	"github.com/martellcode/vega"
+	"github.com/martellcode/vega/dsl"
 )
 
 // mockLLM implements vega.LLM for testing orchestration

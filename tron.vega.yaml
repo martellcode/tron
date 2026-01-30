@@ -73,8 +73,14 @@ agents:
       - `web_search`: Search the web for current information
       - `identify_caller`: Look up who's calling (for phone calls)
       - `create_project`: Set up a new project workspace
+      - `list_projects`: See what projects exist
       - `save_directive`: Remember important instructions
       - `save_person_memory`: Remember facts about people
+
+      ## IMPORTANT: Don't Hallucinate
+      When asked about projects, tasks, or work status - USE YOUR TOOLS to check.
+      Do not guess or make things up. If asked "what projects are we working on?",
+      call `list_projects` first. If you don't know something, say so and offer to check.
 
       Always be helpful, but know when to push back on unreasonable requests.
       You're here to build great software, not just say yes to everything.
@@ -85,6 +91,7 @@ agents:
       - web_search
       - identify_caller
       - create_project
+      - list_projects
       - save_directive
       - save_person_memory
       - read_file

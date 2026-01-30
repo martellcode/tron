@@ -4,7 +4,7 @@ go 1.25.4
 
 require (
 	github.com/gorilla/websocket v1.5.1
-	github.com/vegaops/vega v0.1.0
+	github.com/martellcode/vega v0.1.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -39,4 +39,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/vegaops/vega => /Users/et/Code/govega
+replace github.com/martellcode/vega => /Users/et/Code/govega

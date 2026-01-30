@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/martellcode/tron/internal/tools"
-	"github.com/vegaops/vega"
-	"github.com/vegaops/vega/dsl"
+	"github.com/martellcode/vega"
+	"github.com/martellcode/vega/dsl"
 )
 
 // mockLLM implements vega.LLM for testing

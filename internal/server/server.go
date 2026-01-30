@@ -16,8 +16,8 @@ import (
 	"github.com/martellcode/tron/internal/subdomain"
 	"github.com/martellcode/tron/internal/tools"
 	"github.com/martellcode/tron/internal/voice/elevenlabs"
-	"github.com/vegaops/vega"
-	"github.com/vegaops/vega/dsl"
+	"github.com/martellcode/vega"
+	"github.com/martellcode/vega/dsl"
 )
 
 // Server handles VAPI webhooks and provides OpenAI-compatible chat completions

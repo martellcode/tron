@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/martellcode/tron/internal/subdomain"
-	"github.com/vegaops/vega"
-	"github.com/vegaops/vega/container"
-	"github.com/vegaops/vega/dsl"
+	"github.com/martellcode/vega"
+	"github.com/martellcode/vega/container"
+	"github.com/martellcode/vega/dsl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -365,6 +365,13 @@ func (pt *PersonaTools) RegisterTo(tools *vega.Tools) {
 	tools.Register("list_servers", vega.ToolDef{
 		Description: "List all running project servers with their URLs",
 		Fn:          pt.listServers,
+		Params:      map[string]vega.ParamDef{},
+	})
+
+	// list_projects - List all projects
+	tools.Register("list_projects", vega.ToolDef{
+		Description: "List all projects in the work directory. Use this to see what projects exist before answering questions about current work.",
+		Fn:          pt.listProjects,
 		Params:      map[string]vega.ParamDef{},
 	})
 }
@@ -1032,6 +1039,61 @@ func (pt *PersonaTools) listServers(ctx context.Context, params map[string]any) 
 		result.WriteString(fmt.Sprintf("  Port: %d\n", s.Port))
 		result.WriteString(fmt.Sprintf("  Status: %s\n", s.Status))
 		result.WriteString(fmt.Sprintf("  Started: %s\n\n", s.StartedAt.Format(time.RFC3339)))
+	}
+
+	return result.String(), nil
+}
+
+// listProjects lists all projects in the work directory
+func (pt *PersonaTools) listProjects(ctx context.Context, params map[string]any) (string, error) {
+	var projects []string
+
+	// Check both possible project locations
+	projectDirs := []string{
+		filepath.Join(pt.workingDir, "projects"),
+		filepath.Join(pt.workingDir, "vega.work", "projects"),
+	}
+
+	for _, dir := range projectDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue // Directory may not exist
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+				// Read README for description if it exists
+				readmePath := filepath.Join(dir, entry.Name(), "README.md")
+				description := ""
+				if data, err := os.ReadFile(readmePath); err == nil {
+					// Extract first non-header line as description
+					lines := strings.Split(string(data), "\n")
+					for _, line := range lines {
+						line = strings.TrimSpace(line)
+						if line != "" && !strings.HasPrefix(line, "#") {
+							description = line
+							break
+						}
+					}
+				}
+
+				info := entry.Name()
+				if description != "" {
+					info = fmt.Sprintf("%s - %s", entry.Name(), description)
+				}
+				projects = append(projects, info)
+			}
+		}
+	}
+
+	if len(projects) == 0 {
+		return "No projects found. Use create_project to start a new project.", nil
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Projects (%d):\n", len(projects)))
+	for _, p := range projects {
+		result.WriteString(fmt.Sprintf("- %s\n", p))
 	}
 
 	return result.String(), nil

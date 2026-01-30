@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/martellcode/tron/internal/memory"
 	"github.com/martellcode/tron/internal/voice/elevenlabs"
-	"github.com/vegaops/vega"
+	"github.com/martellcode/vega"
 )
 
 var upgrader = websocket.Upgrader{

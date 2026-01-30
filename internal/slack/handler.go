@@ -10,15 +10,19 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/martellcode/tron/internal/memory"
-	"github.com/vegaops/vega"
-	"github.com/vegaops/vega/dsl"
+	"github.com/martellcode/vega"
+	"github.com/martellcode/vega/dsl"
 )
+
+// toolCallPattern matches <function_calls>...</function_calls> blocks
+var toolCallPattern = regexp.MustCompile(`(?s)<function_calls>.*?</function_calls>`)
 
 const (
 	maxToolLoops            = 10
@@ -284,16 +288,24 @@ func (h *Handler) processEvent(event *SlackEvent) {
 		return
 	}
 
+	// Strip tool call markup before sending to Slack
+	cleanResponse := stripToolCalls(response)
+	if cleanResponse == "" {
+		// If response was only tool calls, don't send empty message
+		log.Printf("Response contained only tool calls, skipping Slack message")
+		return
+	}
+
 	// Send response
-	if err := h.client.SendMessage(event.Channel, response); err != nil {
+	if err := h.client.SendMessage(event.Channel, cleanResponse); err != nil {
 		log.Printf("Error sending Slack response: %v", err)
 		return
 	}
 
-	// Save to conversation history
+	// Save to conversation history (use cleaned response)
 	messages = append(messages, conversationMessage{
 		Role:    "assistant",
-		Content: response,
+		Content: cleanResponse,
 	})
 
 	h.conversationsMu.Lock()
@@ -543,4 +555,11 @@ func (h *Handler) cleanupEventCache() {
 			delete(h.processedEvents, eventID)
 		}
 	}
+}
+
+// stripToolCalls removes <function_calls>...</function_calls> blocks from response text
+// so raw tool markup doesn't get shown to users in Slack
+func stripToolCalls(response string) string {
+	cleaned := toolCallPattern.ReplaceAllString(response, "")
+	return strings.TrimSpace(cleaned)
 }
