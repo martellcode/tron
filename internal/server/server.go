@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,6 +50,14 @@ type Server struct {
 	// Subdomain routing for project servers
 	subdomainRegistry *subdomain.Registry
 	processManager    *subdomain.ProcessManager
+
+	// Life loop for triggering activities
+	lifeLoop LifeLoop
+}
+
+// LifeLoop interface for Tony's autonomous routine (to avoid circular imports)
+type LifeLoop interface {
+	TriggerActivity(activity string) string
 }
 
 // New creates a new server instance
@@ -92,6 +101,9 @@ func New(orch *vega.Orchestrator, config *dsl.Document, customTools *tools.Perso
 	// Health check
 	mux.HandleFunc("/health", s.handleHealth)
 
+	// Life loop trigger endpoint (for testing/demos)
+	mux.HandleFunc("/internal/life/trigger", s.handleLifeTrigger)
+
 	// Wrap with subdomain routing middleware
 	handler := s.subdomainRegistry.Middleware(mux)
 
@@ -133,6 +145,11 @@ func (s *Server) GetProcessManager() *subdomain.ProcessManager {
 // GetSubdomainRegistry returns the subdomain registry
 func (s *Server) GetSubdomainRegistry() *subdomain.Registry {
 	return s.subdomainRegistry
+}
+
+// SetLifeLoop sets the life loop for triggering activities
+func (s *Server) SetLifeLoop(loop LifeLoop) {
+	s.lifeLoop = loop
 }
 
 // ListenAndServe starts the HTTP server
@@ -184,10 +201,10 @@ type ChatCompletionResponse struct {
 }
 
 type Choice struct {
-	Index        int         `json:"index"`
-	Message      ChatMessage `json:"message,omitempty"`
-	Delta        *ChatDelta  `json:"delta,omitempty"`
-	FinishReason *string     `json:"finish_reason,omitempty"`
+	Index        int          `json:"index"`
+	Message      *ChatMessage `json:"message,omitempty"`
+	Delta        *ChatDelta   `json:"delta,omitempty"`
+	FinishReason *string      `json:"finish_reason,omitempty"`
 }
 
 type ChatDelta struct {
@@ -206,6 +223,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleLifeTrigger(w http.ResponseWriter, r *http.Request) {
+	if s.lifeLoop == nil {
+		http.Error(w, "Life loop not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	activity := r.URL.Query().Get("activity")
+	if activity == "" {
+		// Return list of valid activities
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "Missing 'activity' query parameter",
+			"activities": []string{"news", "goals", "team_check", "reflection", "journal", "post"},
+			"example":    "/internal/life/trigger?activity=news",
+		})
+		return
+	}
+
+	result := s.lifeLoop.TriggerActivity(activity)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"activity": activity,
+		"result":   result,
+	})
+}
+
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -219,8 +262,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// Log incoming request for debugging
+	log.Printf("[chat] Incoming request from %s, body length: %d", r.RemoteAddr, len(body))
+	log.Printf("[chat] Request body: %s", string(body))
+
 	var req ChatCompletionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
+		log.Printf("[chat] JSON parse error: %v", err)
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -259,9 +307,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if userMessage == "" {
+		log.Printf("[chat] No user message found in %d messages", len(req.Messages))
 		http.Error(w, "No user message found", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[chat] Processing message for caller %s: %q (stream=%v)", callerID, userMessage, req.Stream)
 
 	if req.Stream {
 		s.handleStreamingResponse(w, r.Context(), proc, userMessage)
@@ -368,6 +419,8 @@ func parseBudget(s string) *vega.Budget {
 }
 
 func (s *Server) handleStreamingResponse(w http.ResponseWriter, ctx context.Context, proc *vega.Process, message string) {
+	log.Printf("[chat] Starting streaming response")
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -376,12 +429,14 @@ func (s *Server) handleStreamingResponse(w http.ResponseWriter, ctx context.Cont
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		log.Printf("[chat] Streaming not supported")
 		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
 		return
 	}
 
 	stream, err := proc.SendStream(ctx, message)
 	if err != nil {
+		log.Printf("[chat] SendStream error: %v", err)
 		s.writeSSEError(w, flusher, err)
 		return
 	}
@@ -434,6 +489,7 @@ func (s *Server) handleStreamingResponse(w http.ResponseWriter, ctx context.Cont
 	// Send [DONE]
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+	log.Printf("[chat] Streaming response completed")
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, flusher http.Flusher, data interface{}) {
@@ -469,7 +525,7 @@ func (s *Server) handleNonStreamingResponse(w http.ResponseWriter, ctx context.C
 		Model:   "tony",
 		Choices: []Choice{{
 			Index: 0,
-			Message: ChatMessage{
+			Message: &ChatMessage{
 				Role:    "assistant",
 				Content: response,
 			},

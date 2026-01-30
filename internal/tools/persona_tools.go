@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/smtp"
 	"os"
 	"os/exec"
@@ -768,19 +770,83 @@ func (pt *PersonaTools) persistPersonMemory() error {
 	return os.WriteFile(filepath.Join(knowledgeDir, "person_memory.yaml"), data, 0644)
 }
 
-// webSearch performs a web search (stub implementation)
+// webSearch performs a web search using Brave Search API
 func (pt *PersonaTools) webSearch(ctx context.Context, params map[string]any) (string, error) {
 	query, _ := params["query"].(string)
-
-	// This is a stub - in production, integrate with a real search API
-	// like Brave Search, SerpAPI, or similar
-	searchAPI := os.Getenv("SEARCH_API_KEY")
-	if searchAPI == "" {
-		return fmt.Sprintf("Web search for '%s' is not configured. Set SEARCH_API_KEY to enable.", query), nil
+	if query == "" {
+		return "", fmt.Errorf("query is required")
 	}
 
-	// TODO: Implement actual search API call
-	return fmt.Sprintf("Searched for: %s (implement actual search API)", query), nil
+	apiKey := os.Getenv("BRAVE_SEARCH_API_KEY")
+	if apiKey == "" {
+		return "", fmt.Errorf("BRAVE_SEARCH_API_KEY not configured")
+	}
+
+	// Build request
+	searchURL := "https://api.search.brave.com/res/v1/web/search"
+	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add query parameters
+	q := req.URL.Query()
+	q.Add("q", query)
+	q.Add("count", "5") // Top 5 results
+	req.URL.RawQuery = q.Encode()
+
+	// Add headers
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Subscription-Token", apiKey)
+
+	// Execute request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("search API returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var result braveSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Format results
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("Search results for: %s\n\n", query))
+
+	if len(result.Web.Results) == 0 {
+		output.WriteString("No results found.")
+		return output.String(), nil
+	}
+
+	for i, r := range result.Web.Results {
+		output.WriteString(fmt.Sprintf("%d. %s\n", i+1, r.Title))
+		output.WriteString(fmt.Sprintf("   URL: %s\n", r.URL))
+		if r.Description != "" {
+			output.WriteString(fmt.Sprintf("   %s\n", r.Description))
+		}
+		output.WriteString("\n")
+	}
+
+	return output.String(), nil
+}
+
+// braveSearchResponse represents the Brave Search API response
+type braveSearchResponse struct {
+	Web struct {
+		Results []struct {
+			Title       string `json:"title"`
+			URL         string `json:"url"`
+			Description string `json:"description"`
+		} `json:"results"`
+	} `json:"web"`
 }
 
 // execute runs a shell command, optionally in a project's container

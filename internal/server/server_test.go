@@ -423,7 +423,7 @@ func TestChatCompletionResponseFormat(t *testing.T) {
 		Model:   "tony",
 		Choices: []Choice{{
 			Index: 0,
-			Message: ChatMessage{
+			Message: &ChatMessage{
 				Role:    "assistant",
 				Content: "Hello!",
 			},

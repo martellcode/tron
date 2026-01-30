@@ -21,8 +21,8 @@ import (
 	"github.com/martellcode/vega/dsl"
 )
 
-// toolCallPattern matches <function_calls>...</function_calls> blocks
-var toolCallPattern = regexp.MustCompile(`(?s)<function_calls>.*?</function_calls>`)
+// xmlTagPattern matches XML-style tags used for tool calls and results
+var xmlTagPattern = regexp.MustCompile(`(?s)<[a-z_:]+[^>]*>.*?</[a-z_:]+>`)
 
 const (
 	maxToolLoops            = 10
@@ -557,9 +557,12 @@ func (h *Handler) cleanupEventCache() {
 	}
 }
 
-// stripToolCalls removes <function_calls>...</function_calls> blocks from response text
+// stripToolCalls removes XML-style tool call and result blocks from response text
 // so raw tool markup doesn't get shown to users in Slack
 func stripToolCalls(response string) string {
-	cleaned := toolCallPattern.ReplaceAllString(response, "")
+	cleaned := xmlTagPattern.ReplaceAllString(response, "")
+	// Clean up excessive newlines left behind after stripping
+	multiNewline := regexp.MustCompile(`\n{3,}`)
+	cleaned = multiNewline.ReplaceAllString(cleaned, "\n\n")
 	return strings.TrimSpace(cleaned)
 }

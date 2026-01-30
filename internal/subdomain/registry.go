@@ -230,10 +230,11 @@ func (r *Registry) Middleware(next http.Handler) http.Handler {
 		// Extract subdomain
 		subdomain := strings.TrimSuffix(host, "."+Domain)
 
-		// Look up port
+		// Look up port - if subdomain isn't registered, pass through to main handler
+		// This allows reserved subdomains like "api" to work normally
 		port, exists := r.GetBySubdomain(subdomain)
 		if !exists {
-			http.Error(w, "Project not found", http.StatusNotFound)
+			next.ServeHTTP(w, req)
 			return
 		}
 

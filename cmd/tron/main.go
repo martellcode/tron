@@ -15,6 +15,7 @@ import (
 	"github.com/martellcode/tron/internal/callback"
 	"github.com/martellcode/tron/internal/config"
 	"github.com/martellcode/tron/internal/email"
+	"github.com/martellcode/tron/internal/life"
 	"github.com/martellcode/tron/internal/server"
 	"github.com/martellcode/tron/internal/slack"
 	"github.com/martellcode/tron/internal/tools"
@@ -183,12 +184,32 @@ func runServe(args []string) {
 	// Initialize Slack handler if configured
 	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
 	slackSigningSecret := os.Getenv("SLACK_SIGNING_SECRET")
+	var slackClient *slack.Client
 	if slackBotToken != "" {
-		slackClient := slack.NewClient(slackBotToken)
+		slackClient = slack.NewClient(slackBotToken)
 		slackHandler := slack.NewHandler(slackClient, slackSigningSecret, orch, cfg, tronCfg.TronDir)
 		srv.SetSlackHandler(slackHandler)
 		log.Printf("Slack integration enabled")
 	}
+
+	// Initialize Tony's life loop (autonomous daily routine)
+	lifeConfig := life.DefaultConfig(tronCfg.TronDir)
+	if apiURL := os.Getenv("TRON_SOCIAL_API_URL"); apiURL != "" {
+		lifeConfig.SocialEnabled = true
+		lifeConfig.SocialAPIURL = apiURL
+		lifeConfig.SocialAPIKey = os.Getenv("TRON_SOCIAL_API_KEY")
+	}
+	if slackChannel := os.Getenv("TRON_LIFE_SLACK_CHANNEL"); slackChannel != "" {
+		lifeConfig.SlackChannel = slackChannel
+	}
+	tonyLife := life.New(orch, lifeConfig)
+	if slackClient != nil && lifeConfig.SlackChannel != "" {
+		tonyLife.SetSlack(slackClient)
+		log.Printf("Tony's life updates will post to Slack channel: %s", lifeConfig.SlackChannel)
+	}
+	srv.SetLifeLoop(tonyLife)
+	tonyLife.Start()
+	log.Printf("Tony's life loop started")
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,6 +222,7 @@ func runServe(args []string) {
 		<-sigCh
 		log.Println("Shutting down...")
 		cancel()
+		tonyLife.Stop()
 		srv.Shutdown(ctx)
 		orch.Shutdown(ctx)
 	}()
