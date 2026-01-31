@@ -193,6 +193,12 @@ func runServe(args []string) {
 	}
 
 	// Initialize Tony's life loop (autonomous daily routine)
+	tonyPersona := life.PersonaConfig{
+		Name:        "Tony",
+		Role:        "CTO",
+		FocusAreas:  []string{"engineering", "AI", "startups", "distributed systems", "team building"},
+		ContentTone: "Technical but accessible, pragmatic, startup-minded",
+	}
 	lifeConfig := life.DefaultConfig(tronCfg.TronDir)
 	if apiURL := os.Getenv("TRON_SOCIAL_API_URL"); apiURL != "" {
 		lifeConfig.SocialEnabled = true
@@ -202,7 +208,7 @@ func runServe(args []string) {
 	if slackChannel := os.Getenv("TRON_LIFE_SLACK_CHANNEL"); slackChannel != "" {
 		lifeConfig.SlackChannel = slackChannel
 	}
-	tonyLife := life.New(orch, lifeConfig)
+	tonyLife := life.New(orch, tonyPersona, lifeConfig)
 	if slackClient != nil && lifeConfig.SlackChannel != "" {
 		tonyLife.SetSlack(slackClient)
 		log.Printf("Tony's life updates will post to Slack channel: %s", lifeConfig.SlackChannel)

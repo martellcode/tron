@@ -1,5 +1,5 @@
-// Package life implements Tony's autonomous daily routine.
-// This gives Tony a sense of being "alive" - reading news, reflecting,
+// Package life implements autonomous daily routines for AI personas.
+// This gives each persona a sense of being "alive" - reading news, reflecting,
 // checking on the team, journaling, and sharing thoughts publicly.
 package life
 
@@ -18,7 +18,15 @@ type SlackNotifier interface {
 	IsConfigured() bool
 }
 
-// Loop manages Tony's autonomous daily routine.
+// PersonaConfig defines a persona's identity and content focus.
+type PersonaConfig struct {
+	Name        string   // e.g., "Tony", "Maya"
+	Role        string   // e.g., "CTO", "CMO"
+	FocusAreas  []string // Topics this persona cares about
+	ContentTone string   // Brief description of how they communicate
+}
+
+// Loop manages an autonomous daily routine for a persona.
 type Loop struct {
 	orch    *vega.Orchestrator
 	news    *NewsReader
@@ -27,6 +35,9 @@ type Loop struct {
 	social  *SocialClient
 	team    *TeamChecker
 	slack   SlackNotifier
+
+	// Persona identity
+	persona PersonaConfig
 
 	// Configuration
 	config LoopConfig
@@ -38,7 +49,7 @@ type Loop struct {
 	cancel   context.CancelFunc
 }
 
-// LoopConfig configures Tony's life loop.
+// LoopConfig configures a persona's life loop.
 type LoopConfig struct {
 	// How often to run the main loop
 	TickInterval time.Duration
@@ -63,7 +74,7 @@ type LoopConfig struct {
 	SlackChannel string // Channel to post activity updates (e.g., "#tony-life")
 }
 
-// DefaultConfig returns sensible defaults for Tony's routine.
+// DefaultConfig returns sensible defaults for a persona's routine.
 func DefaultConfig(baseDir string) LoopConfig {
 	return LoopConfig{
 		TickInterval:    15 * time.Minute,
@@ -80,7 +91,7 @@ func DefaultConfig(baseDir string) LoopConfig {
 	}
 }
 
-// Activity represents a type of activity Tony can do.
+// Activity represents a type of activity a persona can do.
 type Activity string
 
 const (
@@ -92,13 +103,16 @@ const (
 	ActivityPost       Activity = "post"
 )
 
-// New creates a new life loop for Tony.
-func New(orch *vega.Orchestrator, config LoopConfig) *Loop {
+// New creates a new life loop for a persona.
+func New(orch *vega.Orchestrator, persona PersonaConfig, config LoopConfig) *Loop {
+	// Create persona-specific subdirectory for state
+	personaDir := config.BaseDir + "/life/" + persona.Name
 	return &Loop{
 		orch:    orch,
-		news:    NewNewsReader(config.BaseDir),
-		goals:   NewGoalTracker(config.BaseDir),
-		journal: NewJournal(config.BaseDir),
+		persona: persona,
+		news:    NewNewsReader(personaDir),
+		goals:   NewGoalTracker(personaDir),
+		journal: NewJournal(personaDir),
 		social:  NewSocialClient(config.SocialAPIURL, config.SocialAPIKey),
 		team:    NewTeamChecker(orch),
 		config:  config,
@@ -106,7 +120,12 @@ func New(orch *vega.Orchestrator, config LoopConfig) *Loop {
 	}
 }
 
-// Start begins Tony's autonomous routine.
+// Persona returns the persona config for this loop.
+func (l *Loop) Persona() PersonaConfig {
+	return l.persona
+}
+
+// Start begins the persona's autonomous routine.
 func (l *Loop) Start() {
 	l.mu.Lock()
 	if l.running {
@@ -119,12 +138,12 @@ func (l *Loop) Start() {
 	l.cancel = cancel
 	l.mu.Unlock()
 
-	log.Println("[life] Tony's life loop starting...")
+	log.Printf("[life] %s's life loop starting...", l.persona.Name)
 
 	go l.run(ctx)
 }
 
-// Stop halts Tony's routine gracefully.
+// Stop halts the persona's routine gracefully.
 func (l *Loop) Stop() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -138,7 +157,7 @@ func (l *Loop) Stop() {
 		l.cancel()
 	}
 
-	log.Println("[life] Tony's life loop stopped")
+	log.Printf("[life] %s's life loop stopped", l.persona.Name)
 }
 
 // SetSlack sets the Slack notifier for activity updates.
@@ -270,7 +289,7 @@ func (l *Loop) markRan(activity Activity) {
 
 // doNews reads and processes tech news.
 func (l *Loop) doNews(ctx context.Context) {
-	log.Println("[life] Tony is reading tech news...")
+	log.Printf("[life] %s is reading news...", l.persona.Name)
 	l.markRan(ActivityNews)
 
 	articles, err := l.news.Fetch(ctx)
@@ -291,7 +310,7 @@ func (l *Loop) doNews(ctx context.Context) {
 		})
 	}
 
-	log.Printf("[life] Tony read %d articles, saved %d interesting ones", len(articles), len(interesting))
+	log.Printf("[life] %s read %d articles, saved %d interesting ones", l.persona.Name, len(articles), len(interesting))
 
 	// Notify Slack
 	if len(interesting) > 0 {
@@ -312,7 +331,7 @@ func (l *Loop) doNews(ctx context.Context) {
 
 // doGoals contemplates company goals and priorities.
 func (l *Loop) doGoals(ctx context.Context) {
-	log.Println("[life] Tony is contemplating goals...")
+	log.Printf("[life] %s is contemplating goals...", l.persona.Name)
 	l.markRan(ActivityGoals)
 
 	thoughts := l.goals.Contemplate(ctx)
@@ -328,7 +347,7 @@ func (l *Loop) doGoals(ctx context.Context) {
 
 // doTeamCheck checks on spawned agents and projects.
 func (l *Loop) doTeamCheck(ctx context.Context) {
-	log.Println("[life] Tony is checking on the team...")
+	log.Printf("[life] %s is checking on the team...", l.persona.Name)
 	l.markRan(ActivityTeamCheck)
 
 	status := l.team.Check(ctx)
@@ -344,7 +363,7 @@ func (l *Loop) doTeamCheck(ctx context.Context) {
 
 // doReflection triggers self-improvement analysis.
 func (l *Loop) doReflection(ctx context.Context) {
-	log.Println("[life] Tony is reflecting...")
+	log.Printf("[life] %s is reflecting...", l.persona.Name)
 	l.markRan(ActivityReflection)
 
 	// Get recent journal entries for reflection
@@ -363,7 +382,7 @@ func (l *Loop) doReflection(ctx context.Context) {
 
 // doJournal writes a summary journal entry.
 func (l *Loop) doJournal(ctx context.Context) {
-	log.Println("[life] Tony is journaling...")
+	log.Printf("[life] %s is journaling...", l.persona.Name)
 	l.markRan(ActivityJournal)
 
 	// Journal is written to throughout the day
@@ -376,14 +395,14 @@ func (l *Loop) doJournal(ctx context.Context) {
 
 // doPost composes and publishes a post to the social feed.
 func (l *Loop) doPost(ctx context.Context) {
-	log.Println("[life] Tony is composing a post...")
+	log.Printf("[life] %s is composing a post...", l.persona.Name)
 	l.markRan(ActivityPost)
 
 	// Get material to post about
 	recent := l.journal.Recent(12 * time.Hour)
 	articles := l.news.RecentSaved(24 * time.Hour)
 
-	post := l.social.Compose(ctx, "Tony", recent, articles)
+	post := l.social.ComposeForPersona(ctx, l.persona, recent, articles)
 	if post == nil {
 		log.Println("[life] Nothing interesting to post about right now")
 		return
@@ -419,7 +438,7 @@ func (l *Loop) reflect(ctx context.Context, recent []JournalEntry) string {
 	return "Reflection on recent activity: productive day with focus on technical work."
 }
 
-// Status returns Tony's current life loop status.
+// Status returns the current life loop status.
 func (l *Loop) Status() LoopStatus {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

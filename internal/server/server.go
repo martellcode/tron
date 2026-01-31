@@ -197,7 +197,7 @@ type ChatCompletionResponse struct {
 	Created int64    `json:"created"`
 	Model   string   `json:"model"`
 	Choices []Choice `json:"choices"`
-	Usage   Usage    `json:"usage,omitempty"`
+	Usage   *Usage   `json:"usage,omitempty"`
 }
 
 type Choice struct {
@@ -457,7 +457,9 @@ func (s *Server) handleStreamingResponse(w http.ResponseWriter, ctx context.Cont
 	s.writeSSE(w, flusher, initialChunk)
 
 	// Stream content chunks
+	var fullResponse strings.Builder
 	for chunk := range stream.Chunks() {
+		fullResponse.WriteString(chunk)
 		chunkResponse := ChatCompletionResponse{
 			ID:      responseID,
 			Object:  "chat.completion.chunk",
@@ -470,6 +472,7 @@ func (s *Server) handleStreamingResponse(w http.ResponseWriter, ctx context.Cont
 		}
 		s.writeSSE(w, flusher, chunkResponse)
 	}
+	log.Printf("[chat] Full response: %s", fullResponse.String())
 
 	// Send final chunk with finish_reason
 	finishReason := "stop"
