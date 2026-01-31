@@ -23,6 +23,9 @@ type SocialClient struct {
 	maxPostLen     int
 	minTimeBetween time.Duration
 	lastPostByAgent map[string]time.Time // Track rate limits per agent
+
+	// Track which articles have been posted about (URL -> time posted)
+	postedArticles map[string]time.Time
 }
 
 // Post represents a social feed post.
@@ -57,6 +60,7 @@ func NewSocialClient(apiURL, defaultKey string) *SocialClient {
 		maxPostLen:      288, // Hellotron feed limit
 		minTimeBetween:  10 * time.Minute, // Hellotron rate limit
 		lastPostByAgent: make(map[string]time.Time),
+		postedArticles:  make(map[string]time.Time),
 	}
 }
 
@@ -85,9 +89,16 @@ func (s *SocialClient) ComposeForPersona(ctx context.Context, persona PersonaCon
 	// 2. A general insight from work
 	// 3. Role-appropriate wisdom
 
-	// Try to compose from articles first
+	// Try to compose from articles first (skip already-posted articles)
 	if len(articles) > 0 {
 		for _, article := range articles {
+			// Skip articles we've already posted about (within 24 hours)
+			if lastPosted, ok := s.postedArticles[article.URL]; ok {
+				if time.Since(lastPosted) < 24*time.Hour {
+					continue
+				}
+			}
+
 			content := s.composeFromArticleForPersona(article, persona.Name)
 			if content != "" && s.isSafe(content) {
 				return &SocialPost{
@@ -283,6 +294,18 @@ func (s *SocialClient) Publish(ctx context.Context, post *SocialPost) error {
 
 	log.Printf("[social] %s posted: %s", post.Author, content)
 	s.lastPostByAgent[post.Author] = time.Now()
+
+	// Mark article as posted to avoid duplicate posts about the same content
+	if sourceURL, ok := post.Metadata["source_url"]; ok && sourceURL != "" {
+		s.postedArticles[sourceURL] = time.Now()
+		// Clean up old entries (older than 48 hours)
+		for url, t := range s.postedArticles {
+			if time.Since(t) > 48*time.Hour {
+				delete(s.postedArticles, url)
+			}
+		}
+	}
+
 	return nil
 }
 
