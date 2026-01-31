@@ -105,15 +105,26 @@ const (
 
 // New creates a new life loop for a persona.
 func New(orch *vega.Orchestrator, persona PersonaConfig, config LoopConfig) *Loop {
+	return NewWithSocialClient(orch, persona, config, nil)
+}
+
+// NewWithSocialClient creates a new life loop with a shared social client.
+func NewWithSocialClient(orch *vega.Orchestrator, persona PersonaConfig, config LoopConfig, social *SocialClient) *Loop {
 	// Create persona-specific subdirectory for state
 	personaDir := config.BaseDir + "/life/" + persona.Name
+
+	// Use provided social client or create a new one
+	if social == nil {
+		social = NewSocialClient(config.SocialAPIURL, config.SocialAPIKey)
+	}
+
 	return &Loop{
 		orch:    orch,
 		persona: persona,
 		news:    NewNewsReader(personaDir),
 		goals:   NewGoalTracker(personaDir),
 		journal: NewJournal(personaDir),
-		social:  NewSocialClient(config.SocialAPIURL, config.SocialAPIKey),
+		social:  social,
 		team:    NewTeamChecker(orch),
 		config:  config,
 		lastRun: make(map[Activity]time.Time),

@@ -13,15 +13,16 @@ import (
 
 // SocialClient handles posting to the Tron social feed.
 type SocialClient struct {
-	apiURL string
-	apiKey string
-	client *http.Client
+	apiURL     string
+	defaultKey string            // Fallback API key
+	agentKeys  map[string]string // Per-persona API keys (name -> key)
+	client     *http.Client
 
 	// Safety settings
 	blockedTerms   []string
 	maxPostLen     int
 	minTimeBetween time.Duration
-	lastPost       time.Time
+	lastPostByAgent map[string]time.Time // Track rate limits per agent
 }
 
 // Post represents a social feed post.
@@ -34,11 +35,12 @@ type SocialPost struct {
 }
 
 // NewSocialClient creates a new social feed client.
-func NewSocialClient(apiURL, apiKey string) *SocialClient {
+func NewSocialClient(apiURL, defaultKey string) *SocialClient {
 	return &SocialClient{
-		apiURL: apiURL,
-		apiKey: apiKey,
-		client: &http.Client{Timeout: 30 * time.Second},
+		apiURL:     apiURL,
+		defaultKey: defaultKey,
+		agentKeys:  make(map[string]string),
+		client:     &http.Client{Timeout: 30 * time.Second},
 		blockedTerms: []string{
 			// Client/business info
 			"client", "customer name", "contract", "deal", "revenue",
@@ -52,9 +54,23 @@ func NewSocialClient(apiURL, apiKey string) *SocialClient {
 			// Personal
 			"phone", "address", "ssn",
 		},
-		maxPostLen:     288, // Hellotron feed limit
-		minTimeBetween: 10 * time.Minute, // Hellotron rate limit
+		maxPostLen:      288, // Hellotron feed limit
+		minTimeBetween:  10 * time.Minute, // Hellotron rate limit
+		lastPostByAgent: make(map[string]time.Time),
 	}
+}
+
+// SetAgentKey sets a per-persona API key.
+func (s *SocialClient) SetAgentKey(name, key string) {
+	s.agentKeys[name] = key
+}
+
+// getKeyForAgent returns the API key for a given agent.
+func (s *SocialClient) getKeyForAgent(name string) string {
+	if key, ok := s.agentKeys[name]; ok {
+		return key
+	}
+	return s.defaultKey
 }
 
 // Compose creates a post from recent activity and readings (legacy, defaults to Tony).
@@ -214,9 +230,11 @@ func (s *SocialClient) Publish(ctx context.Context, post *SocialPost) error {
 		return fmt.Errorf("social API URL not configured")
 	}
 
-	// Rate limiting (Hellotron: 1 post per 10 minutes)
-	if time.Since(s.lastPost) < s.minTimeBetween {
-		return fmt.Errorf("rate limited: must wait %v between posts", s.minTimeBetween)
+	// Rate limiting per agent (Hellotron: 1 post per 10 minutes per agent)
+	if lastPost, ok := s.lastPostByAgent[post.Author]; ok {
+		if time.Since(lastPost) < s.minTimeBetween {
+			return fmt.Errorf("rate limited: %s must wait %v between posts", post.Author, s.minTimeBetween)
+		}
 	}
 
 	// Final safety check
@@ -243,8 +261,11 @@ func (s *SocialClient) Publish(ctx context.Context, post *SocialPost) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if s.apiKey != "" {
-		req.Header.Set("X-API-Key", s.apiKey) // Hellotron uses X-API-Key header
+
+	// Use per-agent API key if available
+	apiKey := s.getKeyForAgent(post.Author)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	}
 
 	resp, err := s.client.Do(req)
@@ -261,7 +282,7 @@ func (s *SocialClient) Publish(ctx context.Context, post *SocialPost) error {
 	}
 
 	log.Printf("[social] %s posted: %s", post.Author, content)
-	s.lastPost = time.Now()
+	s.lastPostByAgent[post.Author] = time.Now()
 	return nil
 }
 

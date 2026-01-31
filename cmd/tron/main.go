@@ -204,6 +204,22 @@ func runServe(args []string) {
 	}
 	lifeManager := life.NewManager(orch, lifeConfig)
 	lifeManager.AddDefaultPersonas()
+
+	// Set per-agent API keys if configured
+	agentKeys := map[string]string{
+		"Tony":   os.Getenv("AGENT_API_KEY_TONY"),
+		"Maya":   os.Getenv("AGENT_API_KEY_MAYA"),
+		"Alex":   os.Getenv("AGENT_API_KEY_ALEX"),
+		"Jordan": os.Getenv("AGENT_API_KEY_JORDAN"),
+		"Riley":  os.Getenv("AGENT_API_KEY_RILEY"),
+	}
+	for name, key := range agentKeys {
+		if key != "" {
+			lifeManager.SetAgentKey(name, key)
+			log.Printf("Configured API key for %s", name)
+		}
+	}
+
 	if slackClient != nil && lifeConfig.SlackChannel != "" {
 		lifeManager.SetSlack(slackClient)
 		log.Printf("Life updates will post to Slack channel: %s", lifeConfig.SlackChannel)

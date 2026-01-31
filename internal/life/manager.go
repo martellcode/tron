@@ -12,6 +12,7 @@ type Manager struct {
 	orch   *vega.Orchestrator
 	config LoopConfig
 	slack  SlackNotifier
+	social *SocialClient // Shared social client with per-agent keys
 
 	mu    sync.RWMutex
 	loops map[string]*Loop
@@ -80,11 +81,18 @@ func PersonaSchedule(base LoopConfig, personaIndex int) LoopConfig {
 
 // NewManager creates a new life manager for multiple personas.
 func NewManager(orch *vega.Orchestrator, config LoopConfig) *Manager {
+	social := NewSocialClient(config.SocialAPIURL, config.SocialAPIKey)
 	return &Manager{
 		orch:   orch,
 		config: config,
+		social: social,
 		loops:  make(map[string]*Loop),
 	}
+}
+
+// SetAgentKey sets a per-persona API key for posting.
+func (m *Manager) SetAgentKey(name, key string) {
+	m.social.SetAgentKey(name, key)
 }
 
 // SetSlack sets the Slack notifier for all loops.
@@ -102,7 +110,8 @@ func (m *Manager) AddPersona(persona PersonaConfig, schedule LoopConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	loop := New(m.orch, persona, schedule)
+	// Use the shared social client so all personas share rate limit tracking and keys
+	loop := NewWithSocialClient(m.orch, persona, schedule, m.social)
 	if m.slack != nil {
 		loop.SetSlack(m.slack)
 	}
