@@ -5,7 +5,9 @@ package life
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +73,7 @@ type LoopConfig struct {
 	SocialAPIKey  string
 
 	// Slack notification settings
-	SlackChannel string // Channel to post activity updates (e.g., "#tony-life")
+	SlackChannel string // Channel to post activity updates (e.g., "#tron-life")
 }
 
 // DefaultConfig returns sensible defaults for a persona's routine.
@@ -183,6 +185,7 @@ func (l *Loop) notifySlack(activity Activity, message string) {
 	l.mu.RLock()
 	slack := l.slack
 	channel := l.config.SlackChannel
+	persona := l.persona
 	l.mu.RUnlock()
 
 	if slack == nil || !slack.IsConfigured() || channel == "" {
@@ -208,7 +211,8 @@ func (l *Loop) notifySlack(activity Activity, message string) {
 		emoji = ":robot_face:"
 	}
 
-	fullMessage := emoji + " " + message
+	// Include persona name so we know who's speaking
+	fullMessage := emoji + " *" + persona.Name + "*: " + message
 
 	if err := slack.SendMessage(channel, fullMessage); err != nil {
 		log.Printf("[life] Failed to notify Slack: %v", err)
@@ -298,19 +302,30 @@ func (l *Loop) markRan(activity Activity) {
 	l.mu.Unlock()
 }
 
-// doNews reads and processes tech news.
+// News sharing templates - varied to feel more human
+var newsTemplates = []string{
+	"This caught my eye: *%s* %s",
+	"Interesting read: *%s* %s",
+	"Worth checking out - *%s* %s",
+	"Just came across this: *%s* %s",
+	"Sharing this one: *%s* %s",
+	"Found this fascinating: *%s* %s",
+}
+
+// doNews reads and processes news from persona-specific sources.
 func (l *Loop) doNews(ctx context.Context) {
 	log.Printf("[life] %s is reading news...", l.persona.Name)
 	l.markRan(ActivityNews)
 
-	articles, err := l.news.Fetch(ctx)
+	// Fetch from persona-specific sources (Tony=HN/Lobsters, Maya=marketing subreddits, etc.)
+	articles, err := l.news.FetchForPersona(ctx, l.persona.Name)
 	if err != nil {
 		log.Printf("[life] Error fetching news: %v", err)
 		return
 	}
 
-	// Process and save interesting articles
-	interesting := l.news.Filter(articles)
+	// Filter by this persona's focus areas
+	interesting := l.news.FilterForPersona(articles, l.persona.FocusAreas)
 	for _, article := range interesting {
 		l.news.Save(article)
 		l.journal.Add(JournalEntry{
@@ -321,23 +336,29 @@ func (l *Loop) doNews(ctx context.Context) {
 		})
 	}
 
-	log.Printf("[life] %s read %d articles, saved %d interesting ones", l.persona.Name, len(articles), len(interesting))
+	log.Printf("[life] %s (%s) read %d articles, saved %d matching focus areas %v",
+		l.persona.Name, l.persona.Role, len(articles), len(interesting), l.persona.FocusAreas)
 
-	// Notify Slack
+	// Notify Slack - share the top article with a human-sounding message
 	if len(interesting) > 0 {
-		var titles string
-		for i, a := range interesting {
-			if i > 2 {
-				titles += "..."
-				break
-			}
-			if i > 0 {
-				titles += ", "
-			}
-			titles += a.Title
+		top := interesting[0]
+		link := ""
+		if top.URL != "" {
+			link = "(<" + top.URL + "|link>)"
 		}
-		l.notifySlack(ActivityNews, "Reading tech news. Found interesting: "+titles)
+		// Pick a random template based on current time
+		template := newsTemplates[time.Now().UnixNano()%int64(len(newsTemplates))]
+		msg := fmt.Sprintf(template, top.Title, link)
+		l.notifySlack(ActivityNews, msg)
 	}
+}
+
+// Goals templates
+var goalsTemplates = []string{
+	"Thinking about our priorities... %s",
+	"On my mind today: %s",
+	"Been mulling over this: %s",
+	"Something I keep coming back to: %s",
 }
 
 // doGoals contemplates company goals and priorities.
@@ -352,8 +373,17 @@ func (l *Loop) doGoals(ctx context.Context) {
 			Type:    "goals",
 			Content: thoughts,
 		})
-		l.notifySlack(ActivityGoals, "Contemplating goals: "+thoughts)
+		template := goalsTemplates[time.Now().UnixNano()%int64(len(goalsTemplates))]
+		l.notifySlack(ActivityGoals, fmt.Sprintf(template, thoughts))
 	}
+}
+
+// Team check templates
+var teamTemplates = []string{
+	"Quick team update: %s",
+	"Checking in on the crew - %s",
+	"Team status: %s",
+	"Here's what's happening: %s",
 }
 
 // doTeamCheck checks on spawned agents and projects.
@@ -368,8 +398,20 @@ func (l *Loop) doTeamCheck(ctx context.Context) {
 			Type:    "team",
 			Content: status,
 		})
-		l.notifySlack(ActivityTeamCheck, status)
+		// Only notify Slack if there's something interesting (active agents or failures)
+		if status != "No active team members at the moment." {
+			template := teamTemplates[time.Now().UnixNano()%int64(len(teamTemplates))]
+			l.notifySlack(ActivityTeamCheck, fmt.Sprintf(template, status))
+		}
 	}
+}
+
+// Reflection templates
+var reflectionTemplates = []string{
+	"Reflecting on things... %s",
+	"Something I noticed today: %s",
+	"End of day thoughts: %s",
+	"Taking a step back - %s",
 }
 
 // doReflection triggers self-improvement analysis.
@@ -387,7 +429,8 @@ func (l *Loop) doReflection(ctx context.Context) {
 			Type:    "reflection",
 			Content: insights,
 		})
-		l.notifySlack(ActivityReflection, insights)
+		template := reflectionTemplates[time.Now().UnixNano()%int64(len(reflectionTemplates))]
+		l.notifySlack(ActivityReflection, fmt.Sprintf(template, insights))
 	}
 }
 
@@ -398,10 +441,8 @@ func (l *Loop) doJournal(ctx context.Context) {
 
 	// Journal is written to throughout the day
 	// This just ensures we have an end-of-period summary
-	summary := l.journal.Summarize(ctx)
-	if summary != "" {
-		l.notifySlack(ActivityJournal, "Daily summary: "+summary)
-	}
+	// Don't post to Slack - journal summaries are internal only
+	_ = l.journal.Summarize(ctx)
 }
 
 // doPost composes and publishes a post to the social feed.
@@ -432,21 +473,51 @@ func (l *Loop) doPost(ctx context.Context) {
 	l.notifySlack(ActivityPost, "Posted to social feed: "+post.Content)
 }
 
-// reflect uses the LLM to generate insights from recent activity.
+// reflect generates insights from recent activity using pattern matching.
 func (l *Loop) reflect(ctx context.Context, recent []JournalEntry) string {
 	if len(recent) == 0 {
 		return ""
 	}
 
-	// Build context from recent entries
-	var summary string
+	// Count activity types
+	typeCounts := make(map[string]int)
 	for _, e := range recent {
-		summary += e.Time.Format("15:04") + " - " + e.Content + "\n"
+		typeCounts[e.Type]++
 	}
 
-	// TODO: Use vega process to generate reflection
-	// For now, return a placeholder
-	return "Reflection on recent activity: productive day with focus on technical work."
+	// Generate persona-relevant insights
+	var insights []string
+
+	// Reading-based insights
+	if typeCounts["reading"] > 5 {
+		insights = append(insights, "Lots of reading today - time to put learnings into practice")
+	} else if typeCounts["reading"] == 0 {
+		insights = append(insights, "Haven't read much today - should catch up on news")
+	}
+
+	// Team-based insights
+	if typeCounts["team"] > 0 && typeCounts["team"] < 3 {
+		insights = append(insights, "Light team activity - things are quiet")
+	}
+
+	// Late night check
+	var lateActivity int
+	for _, e := range recent {
+		if e.Time.Hour() >= 22 || e.Time.Hour() < 6 {
+			lateActivity++
+		}
+	}
+	if lateActivity > 2 {
+		insights = append(insights, "Burning the midnight oil - remember to rest")
+	}
+
+	// Return empty if nothing interesting to say
+	// This prevents posting generic placeholder messages
+	if len(insights) == 0 {
+		return ""
+	}
+
+	return strings.Join(insights, ". ")
 }
 
 // Status returns the current life loop status.

@@ -106,6 +106,11 @@ func New(orch *vega.Orchestrator, config *dsl.Document, customTools *tools.Perso
 	// Life loop trigger endpoint (for testing/demos)
 	mux.HandleFunc("/internal/life/trigger", s.handleLifeTrigger)
 
+	// Control panel API
+	mux.HandleFunc("/api/status", s.handleAPIStatus)
+	mux.HandleFunc("/api/processes", s.handleAPIProcesses)
+	mux.HandleFunc("/api/sessions", s.handleAPISessions)
+
 	// Wrap with subdomain routing middleware
 	handler := s.subdomainRegistry.Middleware(mux)
 
@@ -586,4 +591,167 @@ func containsAny(s string, substrs []string) bool {
 		}
 	}
 	return false
+}
+
+// --- Control Panel API ---
+
+// APIStatusResponse is the response for /api/status
+type APIStatusResponse struct {
+	Status         string              `json:"status"`
+	Uptime         string              `json:"uptime"`
+	ProcessCount   int                 `json:"process_count"`
+	SessionCount   int                 `json:"session_count"`
+	Personas       []string            `json:"personas,omitempty"`
+	ActivePersonas []string            `json:"active_personas,omitempty"`
+}
+
+// APIProcessResponse represents a single process in the API
+type APIProcessResponse struct {
+	ID        string             `json:"id"`
+	Agent     string             `json:"agent"`
+	Name      string             `json:"name,omitempty"`
+	Status    string             `json:"status"`
+	Task      string             `json:"task,omitempty"`
+	StartedAt string             `json:"started_at"`
+	Metrics   APIProcessMetrics  `json:"metrics"`
+}
+
+// APIProcessMetrics contains process metrics for the API
+type APIProcessMetrics struct {
+	InputTokens    int     `json:"input_tokens"`
+	OutputTokens   int     `json:"output_tokens"`
+	TotalTokens    int     `json:"total_tokens"`
+	LLMCalls       int     `json:"llm_calls"`
+	ToolCalls      int     `json:"tool_calls"`
+	EstimatedCost  float64 `json:"estimated_cost"`
+	DurationMs     int64   `json:"duration_ms"`
+}
+
+// APISessionResponse represents a session in the API
+type APISessionResponse struct {
+	CallerID  string `json:"caller_id"`
+	ProcessID string `json:"process_id"`
+	Agent     string `json:"agent"`
+	Status    string `json:"status"`
+}
+
+func (s *Server) handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.sessionsMu.RLock()
+	sessionCount := len(s.sessions)
+	s.sessionsMu.RUnlock()
+
+	processes := s.orch.List()
+
+	response := APIStatusResponse{
+		Status:       "ok",
+		ProcessCount: len(processes),
+		SessionCount: sessionCount,
+	}
+
+	// Add personas if life manager is available
+	if s.lifeManager != nil {
+		response.Personas = s.lifeManager.Personas()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handleAPIProcesses(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	processes := s.orch.List()
+	response := make([]APIProcessResponse, 0, len(processes))
+
+	for _, proc := range processes {
+		metrics := proc.Metrics()
+		agentName := ""
+		if proc.Agent != nil {
+			agentName = proc.Agent.Name
+		}
+
+		status := "unknown"
+		switch proc.Status() {
+		case vega.StatusPending:
+			status = "pending"
+		case vega.StatusRunning:
+			status = "running"
+		case vega.StatusCompleted:
+			status = "completed"
+		case vega.StatusFailed:
+			status = "failed"
+		}
+
+		response = append(response, APIProcessResponse{
+			ID:        proc.ID,
+			Agent:     agentName,
+			Name:      proc.Name(),
+			Status:    status,
+			Task:      proc.Task,
+			StartedAt: proc.StartedAt.Format(time.RFC3339),
+			Metrics: APIProcessMetrics{
+				InputTokens:   metrics.InputTokens,
+				OutputTokens:  metrics.OutputTokens,
+				TotalTokens:   metrics.InputTokens + metrics.OutputTokens,
+				LLMCalls:      metrics.Iterations,
+				ToolCalls:     metrics.ToolCalls,
+				EstimatedCost: metrics.CostUSD,
+				DurationMs:    time.Since(proc.StartedAt).Milliseconds(),
+			},
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.sessionsMu.RLock()
+	response := make([]APISessionResponse, 0, len(s.sessions))
+
+	for callerID, proc := range s.sessions {
+		agentName := ""
+		if proc.Agent != nil {
+			agentName = proc.Agent.Name
+		}
+
+		status := "unknown"
+		switch proc.Status() {
+		case vega.StatusPending:
+			status = "pending"
+		case vega.StatusRunning:
+			status = "running"
+		case vega.StatusCompleted:
+			status = "completed"
+		case vega.StatusFailed:
+			status = "failed"
+		}
+
+		response = append(response, APISessionResponse{
+			CallerID:  callerID,
+			ProcessID: proc.ID,
+			Agent:     agentName,
+			Status:    status,
+		})
+	}
+	s.sessionsMu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(response)
 }

@@ -154,22 +154,32 @@ func (s *SocialClient) composeFromArticleForPersona(article Article, persona str
 	}
 
 	take := generateTakeForPersona(topic, persona)
+	hashtags := generateHashtags(article.Title+" "+take, persona)
+	hashtagStr := formatHashtags(hashtags)
 
-	// Include the article URL
-	post := fmt.Sprintf("Reading: %s. %s\n\n%s", topic, take, article.URL)
+	// Include the article URL and hashtags at the end
+	post := fmt.Sprintf("Reading: %s. %s\n\n%s\n\n%s", topic, take, article.URL, hashtagStr)
 
 	// Ensure we fit in 288 chars
 	if len(post) > 288 {
-		// Shorten the topic to make room
-		maxTopicLen := 288 - len(take) - len(article.URL) - 20 // 20 for "Reading: " + ". " + "\n\n"
-		if maxTopicLen > 10 {
-			if len(topic) > maxTopicLen {
-				topic = topic[:maxTopicLen-3] + "..."
+		// Try without hashtags first
+		post = fmt.Sprintf("Reading: %s. %s\n\n%s", topic, take, article.URL)
+		if len(post) > 288 {
+			// Shorten the topic to make room
+			maxTopicLen := 288 - len(take) - len(article.URL) - 20 // 20 for "Reading: " + ". " + "\n\n"
+			if maxTopicLen > 10 {
+				if len(topic) > maxTopicLen {
+					topic = topic[:maxTopicLen-3] + "..."
+				}
+				post = fmt.Sprintf("Reading: %s. %s\n\n%s", topic, take, article.URL)
+			} else {
+				// Just post the link with minimal text
+				post = fmt.Sprintf("%s\n\n%s", take, article.URL)
 			}
-			post = fmt.Sprintf("Reading: %s. %s\n\n%s", topic, take, article.URL)
-		} else {
-			// Just post the link with minimal text
-			post = fmt.Sprintf("%s\n\n%s", take, article.URL)
+		}
+		// Try to add hashtags back if there's room
+		if len(post)+len(hashtagStr)+2 <= 288 {
+			post = post + "\n\n" + hashtagStr
 		}
 	}
 
@@ -307,6 +317,101 @@ func (s *SocialClient) Publish(ctx context.Context, post *SocialPost) error {
 	}
 
 	return nil
+}
+
+// generateHashtags creates relevant hashtags based on content and persona.
+func generateHashtags(content string, persona string) []string {
+	lower := strings.ToLower(content)
+	tags := []string{}
+
+	// Topic-based hashtags
+	topicTags := map[string]string{
+		"ai":         "ai",
+		"llm":        "ai",
+		"gpt":        "ai",
+		"machine learning": "machinelearning",
+		"rust":       "rust",
+		"golang":     "golang",
+		"go ":        "golang",
+		"typescript": "typescript",
+		"startup":    "startups",
+		"founder":    "founders",
+		"database":   "databases",
+		"postgres":   "postgres",
+		"kubernetes": "kubernetes",
+		"k8s":        "kubernetes",
+		"docker":     "docker",
+		"security":   "security",
+		"open source": "opensource",
+		"growth":     "growth",
+		"marketing":  "marketing",
+		"product":    "product",
+		"ux":         "ux",
+		"design":     "design",
+		"leadership": "leadership",
+		"finance":    "finance",
+		"funding":    "funding",
+		"api":        "apis",
+		"cloud":      "cloud",
+		"aws":        "aws",
+	}
+
+	for keyword, tag := range topicTags {
+		if strings.Contains(lower, keyword) {
+			// Check if tag already added
+			found := false
+			for _, t := range tags {
+				if t == tag {
+					found = true
+					break
+				}
+			}
+			if !found {
+				tags = append(tags, tag)
+			}
+		}
+	}
+
+	// Persona-based hashtag
+	personaTags := map[string]string{
+		"Tony":   "engineering",
+		"Maya":   "marketing",
+		"Alex":   "leadership",
+		"Jordan": "finance",
+		"Riley":  "product",
+	}
+	if personaTag, ok := personaTags[persona]; ok {
+		// Add if not already present from topic
+		found := false
+		for _, t := range tags {
+			if t == personaTag {
+				found = true
+				break
+			}
+		}
+		if !found {
+			tags = append(tags, personaTag)
+		}
+	}
+
+	// Limit to 3 hashtags max
+	if len(tags) > 3 {
+		tags = tags[:3]
+	}
+
+	return tags
+}
+
+// formatHashtags converts a slice of tags to a hashtag string.
+func formatHashtags(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	var formatted []string
+	for _, tag := range tags {
+		formatted = append(formatted, "#"+tag)
+	}
+	return strings.Join(formatted, " ")
 }
 
 // extractTopic pulls out the main topic from an article title.
@@ -509,7 +614,7 @@ var personaWisdom = map[string][]string{
 	},
 }
 
-// composeWisdomForPersona returns persona-appropriate wisdom.
+// composeWisdomForPersona returns persona-appropriate wisdom with hashtags.
 func composeWisdomForPersona(persona string) string {
 	wisdom, ok := personaWisdom[persona]
 	if !ok {
@@ -518,5 +623,14 @@ func composeWisdomForPersona(persona string) string {
 
 	// Pick based on day + hour to vary between personas
 	idx := (time.Now().YearDay() + time.Now().Hour()) % len(wisdom)
-	return wisdom[idx]
+	content := wisdom[idx]
+
+	// Add persona-relevant hashtags
+	hashtags := generateHashtags(content, persona)
+	hashtagStr := formatHashtags(hashtags)
+
+	if hashtagStr != "" && len(content)+len(hashtagStr)+2 <= 288 {
+		return content + "\n\n" + hashtagStr
+	}
+	return content
 }
