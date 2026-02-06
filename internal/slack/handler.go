@@ -262,6 +262,17 @@ func (h *Handler) Shutdown() {
 	h.wg.Wait()
 }
 
+// ClearSessions clears all cached sessions, forcing new prompts on next message
+func (h *Handler) ClearSessions() int {
+	h.sessionsMu.Lock()
+	defer h.sessionsMu.Unlock()
+
+	count := len(h.sessions)
+	h.sessions = make(map[string]*vega.Process)
+	log.Printf("[slack] Cleared %d sessions for persona %s", count, h.persona)
+	return count
+}
+
 // HandleEvents is the HTTP handler for Slack events
 func (h *Handler) HandleEvents(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[slack] Received event request from %s", r.RemoteAddr)

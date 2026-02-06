@@ -127,6 +127,9 @@ func New(orch *vega.Orchestrator, config *dsl.Document, customTools *tools.Perso
 	// Life loop trigger endpoint (for testing/demos)
 	mux.HandleFunc("/internal/life/trigger", s.handleLifeTrigger)
 
+	// Session management
+	mux.HandleFunc("/internal/sessions/clear", s.handleClearSessions)
+
 	// Control panel API
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
 	mux.HandleFunc("/api/processes", s.handleAPIProcesses)
@@ -1011,5 +1014,34 @@ func (s *Server) handleSubdomainRegister(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"url":     fmt.Sprintf("https://%s.hellotron.com", req.Subdomain),
+	})
+}
+
+// handleClearSessions clears all Slack sessions to force prompt refresh
+func (s *Server) handleClearSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	total := 0
+
+	// Clear legacy handler
+	if s.slackHandler != nil {
+		total += s.slackHandler.ClearSessions()
+	}
+
+	// Clear per-persona handlers
+	for persona, handler := range s.slackHandlers {
+		count := handler.ClearSessions()
+		total += count
+		log.Printf("[server] Cleared %d sessions for %s", count, persona)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"success":  true,
+		"cleared":  total,
+		"message":  "Sessions cleared. Next messages will use fresh prompts.",
 	})
 }
